@@ -66,7 +66,7 @@ def authenticate(op_type):
             exit(1)
         token = res.json()
     if token['expires_at'] < time.time():
-        # Incoherent state, if the read token is set, that mean that we have already retrieve a read_token/write_token and an
+        # Incoherent state, if the read/write token is set, that mean that we have already retrieve a read_token/write_token and an
         # read/write authorization code. So, we should have store the authorization code
         assert authorization_code is not None, "Incoherent state. " + rw_token + " env variable has been set in" + ENV_PATH \
                                                + " file but not the " \
@@ -141,7 +141,7 @@ def compute_activity_stats(path_to_file):
     file_content = open(path_to_file, 'rb')
     soup = bs.BeautifulSoup(file_content, 'html.parser')
     activities_coords = soup.find_all("trkpt")
-    assert len(activities_coords) >= 2
+    assert len(activities_coords) >= 2, path_to_file + "activity must contain at least two geo points"
     id1, id2 = 0, 1
     dist_in_meters = 0
     total_activity_time_in_seconds = 0
@@ -215,6 +215,18 @@ def load_conf_file():
     return conf_as_json
 
 
+# I dont'know why, but sometimes, the kalenji watch record one last geo bad point which will increase
+# the distance of an acitvity. This function just remove the last geo point of the activity
+def delete_last_activity_geo_point(path_to_file):
+    file_content = open(path_to_file, 'rb')
+    soup = bs.BeautifulSoup(file_content, 'html.parser')
+    activities_coords = soup.find_all("trkpt")
+    if len(activities_coords) > 0:
+        (activities_coords[len(activities_coords) - 1]).extract()
+        with open(path_to_file, "w") as file:
+            file.write(str(soup))
+
+
 if __name__ == "__main__":
     # load env variable
     dotenv.load_dotenv(ENV_PATH)
@@ -232,16 +244,21 @@ if __name__ == "__main__":
     pushed_infos = {}
     for activity_path, start_time in activities:
         dist, enjoy_time = compute_activity_stats(activity_path)
-        while dist > float(configuration["max_dist"]):
+        # for the moment, let's just delete the last geo point and see if it's fix the activity
+        # if it's not sufficient, we will find another way to deal with this case
+        if dist > float(configuration["max_dist"]):
             # WARNING
             print(
                 "For activity " + activity_path + " , dist=" + str(
                     dist) + " km and time=" + str(enjoy_time) + " minutes. Max activity distance is"
-                + configuration["max_dist"] + " km. Please fix this activity and type yes")
-            response = "Bidule"
-            while not ("yes" == response):
-                response = input(" Fixed ? Type yes to continue")
+                + configuration["max_dist"] + " km. Fixing this activity by removing the last geo point.")
+            delete_last_activity_geo_point(activity_path)
             dist, enjoy_time = compute_activity_stats(activity_path)
+        if dist > float(configuration["max_dist"]):
+            print(" Cannot Fix activity " + activity_path + " , dist=" + str(
+                dist) + " km and time=" + str(enjoy_time) + " minutes. Max activity distance is"
+                  + configuration["max_dist"] + " km. Bailing out.")
+            exit(1)
         info = push_activity(write_token, activity_path, start_time)
         pushed_infos[info["id_str"]] = (activity_path, dist, enjoy_time)
     for activity_id, value in pushed_infos.items():
