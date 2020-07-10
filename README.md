@@ -6,10 +6,7 @@ To export the activities from the watch to gpx files, I used this open source pr
 and [strava documentation]( https://developers.strava.com/docs/reference/) help me to understand how to use the API.
 
 # How to run ?
-Plug your watch and run the tiny little script
- ```
-./exporter.sh
-```
+Plug your watch and run the tiny little script ```exporter.sh```
 
 # How It work?
 exporter.sh creates the gpx files using the below configuration and then run exporter.py.
