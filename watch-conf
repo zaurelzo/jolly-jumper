@@ -3,3 +3,4 @@ path=/media/zaurelzo/ONMOVE-220/DATA
 device=OnMove200
 filters=FixElevation,ComputeInstantSpeed
 gpx_extensions=none
+directory=/home/zaurelzo/kalenji_activities
