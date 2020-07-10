@@ -16,6 +16,7 @@ path=/media/zaurelzo/ONMOVE-220/DATA
 device=OnMove200
 filters=FixElevation,ComputeInstantSpeed
 gpx_extensions=none
+directory=/home/zaurelzo/kalenji_activities
 ```
 exporter.py reads the gpx file, does some checks on them to be sure that they are valid and uploads them to strava. 
 You must create a file named .env into the repository project which contain these variable
