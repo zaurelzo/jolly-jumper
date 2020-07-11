@@ -7,6 +7,7 @@ import time
 import bs4 as bs
 import requests
 import dotenv
+from dateutil import tz
 
 # env variables
 ENV_PATH = ".env"
@@ -114,9 +115,21 @@ def get_last_activity(read_token):
 # upload an activity to strava
 def push_activity(write_token, activity_path, start_time):
     files = {'file': open(activity_path, 'rb')}
-    dt_string = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    params = {"name": "ride on " + start_time + " UTC",
-              "description": "upload activity using exporter script on " + dt_string,
+    # now date is local time aware
+    now_as_string = datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+    now_as_string = now_as_string.split(" ")
+
+    # convert start_time using local timezone
+    start_time_object = datetime.datetime.strptime(start_time, '%Y-%m-%dT%H:%M:%SZ')
+    to_zone = tz.tzlocal()
+    from_zone = tz.tzutc()
+    start_time_object = start_time_object.replace(tzinfo=from_zone)
+    start_time_object = start_time_object.astimezone(to_zone)
+    start_time_as_string = start_time_object.strftime("%d-%m-%Y %H:%M:%S")
+    start_time_as_string = start_time_as_string.split(" ")
+
+    params = {"name": "ride on " + start_time_as_string[0] + " at " + start_time_as_string[1],
+              "description": "upload activity using exporter script on " + now_as_string[0] + " at " + now_as_string[1],
               "data_type": "gpx"}
     r = requests.post('https://www.strava.com/api/v3/uploads?access_token=' + write_token['access_token'],
                       files=files, data=params)
@@ -218,16 +231,25 @@ def load_conf_file():
 # I dont'know why, but sometimes, the kalenji watch record one last geo bad point which will increase
 # the distance of an acitvity. This function just remove the last geo point of the activity
 def delete_last_activity_geo_point(path_to_file):
-    file_content = open(path_to_file, 'rb')
-    soup = bs.BeautifulSoup(file_content, 'html.parser')
-    activities_coords = soup.find_all("trkpt")
-    if len(activities_coords) > 0:
-        (activities_coords[len(activities_coords) - 1]).extract()
-        with open(path_to_file, "w") as file:
-            file.write(str(soup))
+    with  open(path_to_file, 'rb') as file_content:
+        soup = bs.BeautifulSoup(file_content, 'html.parser')
+        activities_coords = soup.find_all("trkpt")
+        if len(activities_coords) > 0:
+            (activities_coords[len(activities_coords) - 1]).extract()
+            with open(path_to_file, "w") as file:
+                file.write(str(soup))
+
+
+def check_valid_env_file(path_to_file):
+    with  open(path_to_file, 'r') as file_content:
+        contents = file_content.read()
+        if not contents.endswith("\n"):
+            print(path_to_file + " file must end with an empty line.")
+            exit(1)
 
 
 if __name__ == "__main__":
+    check_valid_env_file(ENV_PATH)
     # load env variable
     dotenv.load_dotenv(ENV_PATH)
     configuration = load_conf_file()
