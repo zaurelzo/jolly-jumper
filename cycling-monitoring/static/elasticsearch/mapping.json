@@ -1,0 +1,87 @@
+{
+  "mappings": {
+    "properties": {
+      "name": {
+        "type": "keyword"
+      },
+      "distance": {
+        "type": "double"
+      },
+      "moving_time": {
+        "type": "double"
+      },
+      "elapsed_time": {
+        "type": "double"
+      },
+      "total_elevation_gain": {
+        "type": "double"
+      },
+      "start_date_local": {
+        "type": "date"
+      },
+      "start_latlng": {
+        "type": "geo_point"
+      },
+      "end_latlng": {
+        "type": "geo_point"
+      },
+      "email": {
+        "type": "keyword"
+      },
+      "average_speed": {
+        "type": "double"
+      },
+      "max_speed": {
+        "type": "double"
+      },
+      "average_watts": {
+        "type": "double"
+      },
+      "description": {
+        "type": "text"
+      },
+      "gear": {
+        "type": "nested",
+        "properties": {
+          "id": {
+            "type": "keyword"
+          },
+          "name": {
+            "type": "keyword"
+          }
+        }
+      },
+      "segment_efforts": {
+        "type": "nested",
+        "properties": {
+          "name": {
+            "type": "keyword"
+          },
+          "moving_time": {
+            "type": "double"
+          },
+          "elapsed_time": {
+            "type": "double"
+          },
+          "start_date_local": {
+            "type": "date"
+          },
+          "distance": {
+            "type": "double"
+          },
+          "average_watts": {
+            "type": "double"
+          },
+          "segment": {
+            "type": "nested",
+            "properties": {
+              "id": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

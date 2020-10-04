@@ -1,3 +1,6 @@
 .env
 .idea/
 venv
+activity.json
+cycling-monitoring/__pycache__/*
+cycling-monitoring/.env
