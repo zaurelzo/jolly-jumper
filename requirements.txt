@@ -18,7 +18,7 @@ defer==1.0.6
 distro==1.4.0
 entrypoints==0.3
 grpcio==1.16.1
-httplib2==0.14.0
+httplib2==0.18.0
 idna==2.8
 ifaddr==0.1.6
 keyring==18.0.1
