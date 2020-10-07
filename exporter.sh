@@ -7,4 +7,4 @@ then
   echo "kalenji_reader failed with code $success"
   exit 1
 fi
-python3.7 exporter.py
+python3.8 exporter.py
