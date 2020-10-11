@@ -10,6 +10,7 @@ from dateutil import tz
 
 from flask import Flask, render_template
 from pymongo import MongoClient
+from pymongo.errors import BulkWriteError
 
 from typing import Dict, List
 
@@ -103,76 +104,22 @@ def authenticate(op_type):
     return token
 
 
-# retrieve activities that are before or after a timestamp
-def get_activities(read_token, before=None, after=None):
-    if (before is not None) and (after is not None):
-        print("incohrent parameters, before and after parameters cannot be specified on the same call")
-        exit(1)
-    elif (before is None) and (after is None):
-        print("incohrent parameters, before and after parameters cannot be both null")
+# retrieve activities that are after a timestamp
+# to retrieve all activites, put a timestamp that is in the past (for example 01/01/1970)
+def get_summary_activities(r_token: dict, page_number: int, after: int = None) -> List[Dict]:
+    if after is None:
+        print(" After parameters cannot be  null")
         exit(1)
     else:
-        time_param = "&"
-        if before is not None:
-            time_param = time_param + "before=" + before
-        else:
-            time_param = time_param + "after=" + after
+        time_param = "&after=" + str(after)
     url = "https://www.strava.com/api/v3/activities"
-    access_token = read_token['access_token']
-    keep_running = True
-    page_number = 1
-    list_activities = []
-    while keep_running:
-        # change per_page (up to 200) and page (1,2,3 etc.) to retrieve more activities
-        r = requests.get(
-            url + '?access_token=' + access_token + '&per_page=200' + '&page=' + str(page_number) + time_param)
-        if r.status_code < 200 or r.status_code > 300:
-            print("Cannot retrieve last activity ", r.content)
-            exit(1)
-        r = r.json()
-        if not r:
-            keep_running = False
-        else:
-            # Todo add Them to the list
-            page_number = page_number + 1
-    return list_activities
-    # return json.loads(info)
-
-
-# upload an activity to strava
-def push_activity(write_token, activity_path, start_time):
-    files = {'file': open(activity_path, 'rb')}
-    # now date is local time aware
-    now_as_string = datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S")
-    now_as_string = now_as_string.split(" ")
-
-    # convert start_time using local timezone
-    start_time_object = datetime.datetime.strptime(start_time, '%Y-%m-%dT%H:%M:%SZ')
-    to_zone = tz.tzlocal()
-    from_zone = tz.tzutc()
-    start_time_object = start_time_object.replace(tzinfo=from_zone)
-    start_time_object = start_time_object.astimezone(to_zone)
-    start_time_as_string = start_time_object.strftime("%d-%m-%Y %H:%M:%S")
-    start_time_as_string = start_time_as_string.split(" ")
-
-    params = {"name": "ride on " + start_time_as_string[0] + " at " + start_time_as_string[1],
-              "description": "upload activity using exporter script on " + now_as_string[0] + " at " + now_as_string[1],
-              "data_type": "gpx"}
-    r = requests.post('https://www.strava.com/api/v3/uploads?access_token=' + write_token['access_token'],
-                      files=files, data=params)
-    if r.status_code < 200 or r.status_code > 300:
-        print("Cannot push activity " + activity_path, r.content)
-        exit(1)
-    return r.json()
-
-
-# verifiy the status of an uploaded acitvity (processed, ready , duplicate etc.)
-def check_upload(write_token, activity_id, activity_path):
+    access_token = r_token['access_token']
+    # change per_page (up to 200) and page (1,2,3 etc.) to retrieve more activities
     r = requests.get(
-        'https://www.strava.com/api/v3/uploads/' + activity_id + '?access_token=' + write_token['access_token'])
+        url + '?access_token=' + access_token + '&per_page=200' + '&page=' + str(page_number) + time_param)
     if r.status_code < 200 or r.status_code > 300:
-        print("Cannot check upload status for activity " + activity_path, r.content)
-        exit(1)
+        print("Cannot activities ", r.content)
+        return [{"error": r.content}]
     return r.json()
 
 
@@ -184,38 +131,73 @@ def check_valid_env_file(path_to_file):
             exit(1)
 
 
-app = Flask(__name__)
-client = MongoClient('localhost', 27017)
-col = client.test.movie
+def insert_activities_to_mongo(activities: List[Dict], collection) -> List:
+    try:
+        for act in activities:
+            collection.update_one({"id": act["id"]}, {"$set": act}, True)
+    except BulkWriteError as bwe:
+        return [{"error": bwe.details}]
 
 
-def build_batch_activities(strava_activities: List[Dict]) -> List[List[Dict]]:
+# TODO : better handling of errors.
+def update_activity_into_mongo(doc_to_update: {}, new_values: {}, collection):
+    return collection.update_one(doc_to_update, {"$set": new_values}, True).acknowledged
+
+
+def get_ids_activities_to_update(collection):
+    match = collection.find({"segment_efforts": {"$exists": False}}, {"_id": 0, "id": 1})
+    return [m for m in match]
+
+
+def get_details_activity(r_token: dict, activity_id: str) -> {}:
+    url = "https://www.strava.com/api/v3/activities/" + activity_id
+    access_token = r_token['access_token']
+    r = requests.get(url + '?access_token=' + access_token + '&per_page=1' + '&page=1')
+    if r.status_code < 200 or r.status_code > 300:
+        print("Cannot retrieve last activity ", r.content)
+        return {"error": r.content}
+    return json.loads(r.content)
+
+
+def build_batch_summary_activities(strava_activities: List[Dict]) -> List[Dict]:
     if len(strava_activities) == 0:
         return []
-
     batch_docs_to_insert: List = []
-    current_batch = []
     for activity in strava_activities:
         current_doc = {}
         # level 1
-        level1_keys = ['name', 'distance', 'moving_time', 'elapsed_time', 'total_elevation_gain', 'start_date_local',
-                       'start_latlng', 'start_latlng', 'end_latlng', 'average_speed', 'max_speed', 'average_watts',
-                       'description']
+        level1_keys = ['id', 'name', 'distance', 'moving_time', 'elapsed_time', 'total_elevation_gain',
+                       'start_date_local', 'start_latlng', 'start_latlng', 'end_latlng', 'average_speed',
+                       'max_speed',
+                       'average_watts', ]
         for k in level1_keys:
             if activity.get(k) is not None:
                 current_doc[k] = activity[k]
             # add logging if key not found
 
-        level2_keys = [('gear', 'id'), ('gear', 'name')]
-        for k1, k2 in level2_keys:
-            if activity.get(k1) is not None:
-                if activity.get(k1).get(k2) is not None:
-                    if current_doc.get(k1) is None:
-                        current_doc[k1] = {}
-                    current_doc[k1][k2] = activity[k1][k2]
-            # add logging if key not found
+        if current_doc is not {}:
+            batch_docs_to_insert.append(current_doc)
+    return batch_docs_to_insert
 
-        # keep interesting key in segments efforts.
+
+def build_details_activity_to_update(activity: {}) -> {}:
+    current_doc = {}
+    for k in ['description']:
+        if current_doc.get(k) is not None:
+            current_doc[k] = activity[k]
+        # add logging if key not found
+
+    level2_keys = [('gear', 'id'), ('gear', 'name')]
+    for k1, k2 in level2_keys:
+        if activity.get(k1) is not None:
+            if activity.get(k1).get(k2) is not None:
+                if current_doc.get(k1) is None:
+                    current_doc[k1] = {}
+                current_doc[k1][k2] = activity[k1][k2]
+        # add logging if key not found
+
+    # keep interesting key in segments efforts.
+    if activity.get('segment_efforts'):
         list_of_segments = activity['segment_efforts']
         if list_of_segments is not None:
             current_doc['segment_efforts'] = []
@@ -233,16 +215,12 @@ def build_batch_activities(strava_activities: List[Dict]) -> List[List[Dict]]:
                         current_doc['segment_efforts'][i]['segment'] = {'id': seg.get('segment').get('id')}
                 # add logging if key not found
 
-        # add doc to new list
-        if current_doc is not {}:
-            # to effiently insert docs, build batch of size below 1000 elements
-            if len(current_batch) > 900:
-                batch_docs_to_insert.append(current_batch)
-                current_batch = []
-            current_batch.append(current_doc)
-    if len(current_batch) != 0:
-        batch_docs_to_insert.append(current_batch)
-    return batch_docs_to_insert
+    return current_doc
+
+
+app = Flask(__name__)
+client = MongoClient('localhost', 27017)
+collection = client.strava.activities
 
 
 @app.route('/')
@@ -253,7 +231,7 @@ def hello():
     # read_token = authenticate("READ")
     # last_activity_info = get_last_activity(read_token, "4098064182")
     # print(last_activity_info)
-    mov = col.find(projection={'_id': 0})
+    mov = collection.find(projection={'_id': 0})
     print("========", mov)
     # return render_template('index.html')
     return mov[0]
@@ -264,50 +242,21 @@ if __name__ == "__main__":
     # load env variable
     dotenv.load_dotenv(ENV_PATH)
     read_token = authenticate("READ")
-    last_activity_info = get_activities(read_token, "4098064182")
-    li = build_batch_activities(last_activity_info)
-    print(li)
-
-# print("Computing from " + configuration["activities_folder"] + " activities to upload. Last activity date is " +
-#       last_activity_info['start_date'])
-# activities = select_activities_to_upload(configuration, last_activity_info['start_date'])
-# if len(activities) == 0:
-#     print("No activity to upload")
-#     exit(1)
-# print("Trying to upload these activities ", activities)
-# write_token = authenticate("WRITE")
-# pushed_infos = {}
-# for activity_path, start_time in activities:
-#     dist, enjoy_time = compute_activity_stats(activity_path)
-#     # for the moment, let's just delete the last geo point and see if it's fix the activity
-#     # if it's not sufficient, we will find another way to deal with this case
-#     if dist > float(configuration["max_dist"]):
-#         # WARNING
-#         print(
-#             "For activity " + activity_path + " , dist=" + str(
-#                 dist) + " km and time=" + str(enjoy_time) + " minutes. Max activity distance is"
-#             + configuration["max_dist"] + " km. Fixing this activity by removing the last geo point.")
-#         delete_last_activity_geo_point(activity_path)
-#         dist, enjoy_time = compute_activity_stats(activity_path)
-#     if dist > float(configuration["max_dist"]):
-#         print(" Cannot Fix activity " + activity_path + " , dist=" + str(
-#             dist) + " km and time=" + str(enjoy_time) + " minutes. Max activity distance is"
-#               + configuration["max_dist"] + " km. Bailing out.")
-#         exit(1)
-#     info = push_activity(write_token, activity_path, start_time)
-#     pushed_infos[info["id_str"]] = (activity_path, dist, enjoy_time)
-# for activity_id, value in pushed_infos.items():
-#     activity_path, dist, enjoy_time = value
-#     checked = check_upload(write_token, activity_id, activity_path)
-#     while "processed" in checked["status"]:
-#         print("Current Status is '" + checked[
-#             "status"] + "' .Checking new processing status for the id " + activity_id + " associate to the activity " + activity_path)
-#         # strava advise to wait 8 second before checking if you activity is ready ( increase this value if you're consumming
-#         # lot of api calls)
-#         time.sleep(8)
-#         checked = check_upload(write_token, activity_id, activity_path)
-#     if "ready" in checked["status"]:
-#         print("For pushed activity " + activity_path + " dist=" + str(dist) + "km, time=" + str(
-#             enjoy_time) + "minutes")
-#     else:
-#         print("Error when check upload status for activity " + activity_path, checked)
+    client = MongoClient('localhost', 27017)
+    collection = client.strava.activities
+    time_after = time.mktime(datetime.datetime.strptime("11/10/2020", "%d/%m/%Y").timetuple())
+    activities = get_summary_activities(r_token=read_token, page_number=1, after=time_after)
+    # print(len(activities))
+    li = build_batch_summary_activities(activities)
+    # print(li)
+    insert_activities_to_mongo(li, collection)
+    ids_to_get_details = get_ids_activities_to_update(collection)
+    for doc_with_id in ids_to_get_details:
+        detail = get_details_activity(r_token=read_token, activity_id=str(doc_with_id["id"]))
+        details_activity = build_details_activity_to_update(detail)
+        update_activity_into_mongo(doc_with_id, details_activity, collection)
+    # print(li)
+    # print(get_details_activity(r_token=read_token, activity_id=str(4186242157)))
+# print(insert_activities_to_mongo(li, collection).inserted_ids)
+# for p in collection.find():
+#     print(p)
