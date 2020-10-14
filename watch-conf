@@ -2,5 +2,5 @@ source=Path
 path=/media/zaurelzo/ONMOVE-220/DATA
 device=OnMove200
 filters=ComputeInstantSpeed
-gpx_extensions=none
+gpx_extensions=gpxdata
 directory=/home/zaurelzo/kalenji_activities
