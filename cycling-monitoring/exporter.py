@@ -1,18 +1,16 @@
 import datetime
 import json
-import math
 import os
 import time
+from typing import Dict, List
 
-import requests
+from flask import render_template
+
 import dotenv
-from dateutil import tz
-
-from flask import Flask, render_template
+import requests
+from flask import Flask
 from pymongo import MongoClient
 from pymongo.errors import BulkWriteError
-
-from typing import Dict, List
 
 # env variables
 ENV_PATH = ".env"
@@ -25,6 +23,7 @@ READ_TOKEN = "READ_TOKEN"
 WRITE_TOKEN = "WRITE_TOKEN"
 
 
+########################################## strava request  ################################"
 # authenticate the user and return a read or write token api
 def authenticate(op_type):
     token = None
@@ -123,14 +122,22 @@ def get_summary_activities(r_token: dict, page_number: int, after: int = None) -
     return r.json()
 
 
-def check_valid_env_file(path_to_file):
-    with  open(path_to_file, 'r') as file_content:
-        contents = file_content.read()
-        if not contents.endswith("\n"):
-            print(path_to_file + " file must end with an empty line.")
-            exit(1)
+def get_details_activity(r_token: dict, activity_id: str) -> ({}, str, str):
+    url = "https://www.strava.com/api/v3/activities/" + activity_id
+    access_token = r_token['access_token']
+    r = requests.get(url + '?access_token=' + access_token + '&per_page=1' + '&page=1')
+    X_RateLimit_Usage = None
+    if r.headers.get('X-RateLimit-Usage') is not None:
+        X_RateLimit_Usage = r.headers.get('X-RateLimit-Usage')
+    X_RateLimit_Limit = None
+    if r.headers.get('X-RateLimit-Limit') is not None:
+        X_RateLimit_Limit = r.headers.get('X-RateLimit-Limit')
+    if r.status_code < 200 or r.status_code > 300:
+        return {"error": r.content}, X_RateLimit_Usage, X_RateLimit_Limit
+    return json.loads(r.content), X_RateLimit_Usage, X_RateLimit_Limit
 
 
+################################### mongo ####################################################################
 def insert_activities_to_mongo(activities: List[Dict], collection) -> List:
     try:
         for act in activities:
@@ -144,20 +151,34 @@ def update_activity_into_mongo(doc_to_update: {}, new_values: {}, collection):
     return collection.update_one(doc_to_update, {"$set": new_values}, True).acknowledged
 
 
-def get_ids_activities_to_update(collection):
+def get_ids_activities_to_update_from_mongo(collection):
     match = collection.find({"segment_efforts": {"$exists": False}}, {"_id": 0, "id": 1})
     return [m for m in match]
 
 
-def get_details_activity(r_token: dict, activity_id: str) -> {}:
-    url = "https://www.strava.com/api/v3/activities/" + activity_id
-    access_token = r_token['access_token']
-    r = requests.get(url + '?access_token=' + access_token + '&per_page=1' + '&page=1')
-    if r.status_code < 200 or r.status_code > 300:
-        print("Cannot retrieve last activity ", r.content)
-        return {"error": r.content}
-    return json.loads(r.content)
+def get_last_downloaded_activity_from_mongo(collection):
+    match = collection.find({}, {"start_date_local": 1, "_id": 0}).sort("start_date_local", -1).limit(1)
+    date_array = [m for m in match]
+    if len(date_array) == 0:
+        return "1970-01-01T00:00:00Z"
+    else:
+        return (date_array[0]["start_date_local"]).split("T")[0]
 
+
+def get_average_speed_from_mongo(collection):
+    match = collection.find({"average_speed": {"$exists": True}},
+                            {"_id": 0, "average_speed": 1, "start_date_local": 1}).sort(
+        "start_date_local", 1)
+    res = []
+    for m in match:
+        doc = {}
+        doc["speed"] = m["average_speed"] * 3.6
+        doc["date"] = (m["start_date_local"]).split("T")[0]
+        res.append(doc)
+    return res
+
+
+###################################### APP LOGIC  ################################################################"
 
 def build_batch_summary_activities(strava_activities: List[Dict]) -> List[Dict]:
     if len(strava_activities) == 0:
@@ -183,10 +204,10 @@ def build_batch_summary_activities(strava_activities: List[Dict]) -> List[Dict]:
 def build_details_activity_to_update(activity: {}) -> {}:
     current_doc = {}
     for k in ['description']:
-        if current_doc.get(k) is not None:
+        if activity.get(k) is not None:
             current_doc[k] = activity[k]
         # add logging if key not found
-
+    # print("current", current_doc)
     level2_keys = [('gear', 'id'), ('gear', 'name')]
     for k1, k2 in level2_keys:
         if activity.get(k1) is not None:
@@ -218,45 +239,76 @@ def build_details_activity_to_update(activity: {}) -> {}:
     return current_doc
 
 
+def check_valid_env_file(path_to_file):
+    with  open(path_to_file, 'r') as file_content:
+        contents = file_content.read()
+        if not contents.endswith("\n"):
+            print(path_to_file + " file must end with an empty line.")
+            exit(1)
+
+
+######################################  web app endpoints ####################################
 app = Flask(__name__)
 client = MongoClient('localhost', 27017)
 collection = client.strava.activities
 
 
-@app.route('/')
-def hello():
+@app.route('/refresh')
+def refresh():
+    check_valid_env_file(ENV_PATH)
+    # load env variable
+    dotenv.load_dotenv(ENV_PATH)
+    read_token = authenticate("READ")
+    last_date_downloaded_activity = get_last_downloaded_activity_from_mongo(collection)
+    time_after = time.mktime(
+        datetime.datetime.strptime(last_date_downloaded_activity, "%Y-%m-%d").timetuple())
+    activities = get_summary_activities(r_token=read_token, page_number=1, after=time_after)
+    li = build_batch_summary_activities(activities)
+    # # print(li)
+    insert_activities_to_mongo(li, collection)
+    ids_to_get_details = get_ids_activities_to_update_from_mongo(collection)
+    # print(len(ids_to_get_details))
+    for doc_with_id in ids_to_get_details:
+        # TODO : stop this loop if we reach api usage limit
+        detail, _, _ = get_details_activity(r_token=read_token, activity_id=str(doc_with_id["id"]))
+        details_activity = build_details_activity_to_update(detail)
+        if details_activity is not {}:
+            update_activity_into_mongo(doc_with_id, details_activity, collection)
+
+
+@app.route('/average_speed')
+def average_speed():
     # check_valid_env_file(ENV_PATH)
     # # load env variable
     # dotenv.load_dotenv(ENV_PATH)
     # read_token = authenticate("READ")
     # last_activity_info = get_last_activity(read_token, "4098064182")
     # print(last_activity_info)
-    mov = collection.find(projection={'_id': 0})
-    print("========", mov)
-    # return render_template('index.html')
-    return mov[0]
+    # mov = collection.find(projection={'_id': 0})
+    data = get_average_speed_from_mongo(collection)
+    return render_template('index.html', datar=data)
+    # return mov[0]
 
-
-if __name__ == "__main__":
-    check_valid_env_file(ENV_PATH)
-    # load env variable
-    dotenv.load_dotenv(ENV_PATH)
-    read_token = authenticate("READ")
-    client = MongoClient('localhost', 27017)
-    collection = client.strava.activities
-    time_after = time.mktime(datetime.datetime.strptime("11/10/2020", "%d/%m/%Y").timetuple())
-    activities = get_summary_activities(r_token=read_token, page_number=1, after=time_after)
-    # print(len(activities))
-    li = build_batch_summary_activities(activities)
-    # print(li)
-    insert_activities_to_mongo(li, collection)
-    ids_to_get_details = get_ids_activities_to_update(collection)
-    for doc_with_id in ids_to_get_details:
-        detail = get_details_activity(r_token=read_token, activity_id=str(doc_with_id["id"]))
-        details_activity = build_details_activity_to_update(detail)
-        update_activity_into_mongo(doc_with_id, details_activity, collection)
-    # print(li)
-    # print(get_details_activity(r_token=read_token, activity_id=str(4186242157)))
-# print(insert_activities_to_mongo(li, collection).inserted_ids)
-# for p in collection.find():
-#     print(p)
+# if __name__ == "__main__":
+#     check_valid_env_file(ENV_PATH)
+#     # load env variable
+#     dotenv.load_dotenv(ENV_PATH)
+#     read_token = authenticate("READ")
+#     client = MongoClient('localhost', 27017)
+#     collection = client.strava.activities
+#     # last_date_downloaded_activity = get_last_downloaded_activity_from_mongo(collection)
+#     # time_after = time.mktime(
+#     #     datetime.datetime.strptime(last_date_downloaded_activity, "%Y-%m-%d").timetuple())
+#     # activities = get_summary_activities(r_token=read_token, page_number=1, after=time_after)
+#     # li = build_batch_summary_activities(activities)
+#     # # # print(li)
+#     # insert_activities_to_mongo(li, collection)
+#     # ids_to_get_details = get_ids_activities_to_update_from_mongo(collection)
+#     # print(len(ids_to_get_details))
+#     # for doc_with_id in ids_to_get_details:
+#     #     detail, _, _ = get_details_activity(r_token=read_token, activity_id=str(doc_with_id["id"]))
+#     #     details_activity = build_details_activity_to_update(detail)
+#     #     if details_activity is not {}:
+#     #         update_activity_into_mongo(doc_with_id, details_activity, collection)
+#
+#     print(get_average_speed_from_mongo(collection))

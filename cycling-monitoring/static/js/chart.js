@@ -2,8 +2,8 @@ const margin = {top: 20, right: 30, bottom: 30, left: 60},
     width = 900 - margin.left - margin.right,
     height = 400 - margin.top - margin.bottom;
 
-const parseTime = d3.timeParse("%m/%d/%Y");
-const dateFormat = d3.timeFormat("%m/%d/%Y");
+const parseTime = d3.timeParse("%Y-%m-%d");
+const dateFormat = d3.timeFormat("%Y-%m-%d");
 
 const x = d3.scaleTime()
     .range([0, width]);
@@ -25,15 +25,11 @@ const svg = d3.select("#chart").append("svg")
     .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
 
 
-var data = [
-{"date":"08/19/2020","speed" : 23.5},
-{"date":"09/22/2020","speed" : 25},
-{"date":"10/01/2020", "speed" :27.5},
-{"date":"10/01/2020", "speed" :28.5}
-]
+//var average_speed_array = {{average_speed_arrayr|tojson}};
+console.log(average_speed_array)
 
     // Conversion des données du fichier, parsing des dates et '+' pour expliciter une valeur numérique.
-    data.forEach(function(d) {
+    average_speed_array.forEach(function(d) {
         d.date = parseTime(d.date);
        // d.speed = d.speed
     });
@@ -41,8 +37,8 @@ var data = [
     // Contrairement au tutoriel Bar Chart, plutôt que de prendre un range entre 0 et le max on demande 
     // directement à D3JS de nous donner le min et le max avec la fonction 'd3.extent', pour la date comme 
     // pour le cours de fermeture (close).
-    x.domain(d3.extent(data, d => d.date));
-    y.domain(d3.extent(data, d => d.speed));
+    x.domain(d3.extent(average_speed_array, d => d.date));
+    y.domain(d3.extent(average_speed_array, d => d.speed));
 
     // Ajout de l'axe X
     svg.append("g")
@@ -58,7 +54,7 @@ var data = [
             .attr("y", 6)
             .attr("dy", "0.71em")
             .style("text-anchor", "end")
-            .text("speed");
+            .text(" average speed");
     
 
       svg
@@ -79,7 +75,7 @@ var data = [
  
     // Ajout d'un path calculé par la fonction line à partir des données de notre fichier.
     svg.append("path")
-        .datum(data)
+        .datum(average_speed_array)
         .attr("class", "line")
         .attr("d", line)
         .attr("fill", "none")
