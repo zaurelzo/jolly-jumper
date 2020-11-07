@@ -162,11 +162,12 @@ def compute_activity_stats(path_to_file):
         lat1, long1 = float(activities_coords[id1].get("lat")), float(activities_coords[id1].get("lon"))
         lat2, long2 = float(activities_coords[id2].get("lat")), float(activities_coords[id2].get("lon"))
         dist_in_meters += haversine((lat1, long1), (lat2, long2))
-        date2 = datetime.datetime.strptime(activities_coords[id2].find_all("time")[0].string, '%Y-%m-%dT%H:%M:%S.%fZ')
-        date1 = datetime.datetime.strptime(activities_coords[id1].find_all("time")[0].string, '%Y-%m-%dT%H:%M:%S.%fZ')
-        elapsed_time = date2 - date1
-        minutes, seconds = divmod(elapsed_time.total_seconds(), 60)
-        total_activity_time_in_seconds = total_activity_time_in_seconds + seconds + minutes * 60
+        # date2 = datetime.datetime.strptime(activities_coords[id2].find_all("time")[0].string, '%Y-%m-%dT%H:%M:%S.%fZ')
+        # date1 = datetime.datetime.strptime(activities_coords[id1].find_all("time")[0].string, '%Y-%m-%dT%H:%M:%S.%fZ')
+        # elapsed_time = date2 - date1
+        # minutes, seconds = divmod(elapsed_time.total_seconds(), 60)
+        # total_activity_time_in_seconds = total_activity_time_in_seconds + seconds + minutes * 60
+        total_activity_time_in_seconds = total_activity_time_in_seconds + 5
         id1 += 1
         id2 += 1
     return (dist_in_meters / 1000), (total_activity_time_in_seconds / 60)
