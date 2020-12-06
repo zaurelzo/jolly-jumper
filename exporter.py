@@ -113,14 +113,15 @@ def get_last_activity(read_token):
 
 
 # upload an activity to strava
-def push_activity(write_token, activity_path, start_time):
+def push_activity(write_token, activity_path, start_time, start_time_pattern='%Y-%m-%dT%H:%M:%SZ',
+                  device_name="kalenji", file_format="gpx", on_home_trainer=False):
     files = {'file': open(activity_path, 'rb')}
     # now date is local time aware
     now_as_string = datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S")
     now_as_string = now_as_string.split(" ")
 
     # convert start_time using local timezone
-    start_time_object = datetime.datetime.strptime(start_time, '%Y-%m-%dT%H:%M:%SZ')
+    start_time_object = datetime.datetime.strptime(start_time, start_time_pattern)
     to_zone = tz.tzlocal()
     from_zone = tz.tzutc()
     start_time_object = start_time_object.replace(tzinfo=from_zone)
@@ -128,9 +129,11 @@ def push_activity(write_token, activity_path, start_time):
     start_time_as_string = start_time_object.strftime("%d-%m-%Y %H:%M:%S")
     start_time_as_string = start_time_as_string.split(" ")
 
-    params = {"name": "ride on " + start_time_as_string[0] + " at " + start_time_as_string[1],
+    params = {"name": device_name + " ride on " + start_time_as_string[0] + " at " + start_time_as_string[1],
               "description": "upload activity using exporter script on " + now_as_string[0] + " at " + now_as_string[1],
-              "data_type": "gpx"}
+              "data_type": file_format}
+    if on_home_trainer:
+        params["trainer"] = "1"
     r = requests.post('https://www.strava.com/api/v3/uploads?access_token=' + write_token['access_token'],
                       files=files, data=params)
     if r.status_code < 200 or r.status_code > 300:
@@ -207,11 +210,7 @@ def select_activities_to_upload(conf, date_last_activity):
     return activities_to_upload
 
 
-def load_conf_file():
-    required_params = [("activities_folder", "Path to folder which contains activities"),
-                       (
-                           "max_dist",
-                           "up to this distance in km, consider that the acitivity may contain a bad geopoint")]
+def load_conf_file(required_params):
     # load conf file
     content = open("configuration", 'r').read().split("\n")
     # print(type(content))
@@ -253,7 +252,9 @@ if __name__ == "__main__":
     check_valid_env_file(ENV_PATH)
     # load env variable
     dotenv.load_dotenv(ENV_PATH)
-    configuration = load_conf_file()
+    configuration = load_conf_file([("activities_folder", "Path to folder which contains activities"),
+                                    ("max_dist",
+                                     "up to this distance in km, consider that the acitivity may contain a bad geopoint")])
     read_token = authenticate("READ")
     last_activity_info = get_last_activity(read_token)
     print("Computing from " + configuration["activities_folder"] + " activities to upload. Last activity date is " +
