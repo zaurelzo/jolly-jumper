@@ -5,10 +5,14 @@ To export the activities from the watch to gpx files, I used this open source pr
 [This article](https://medium.com/swlh/using-python-to-connect-to-stravas-api-and-analyse-your-activities-dummies-guide-5f49727aac86) 
 and [strava documentation]( https://developers.strava.com/docs/reference/) help me to understand how to use the API.
 
+# Garmin exporter
+The exporter also support garmin devices. 
+The script was tested with my garmin edge 520+ device but I am pretty confident that It will work for all garmin devices.
+
 # How to run ?
 Plug your watch and run the tiny little script ```exporter.sh```
 
-# How It work?
+# How It work for the kalenji watch?
 exporter.sh creates the gpx files using the below configuration and then run exporter.py.
 ```
 source=Path
@@ -18,8 +22,14 @@ filters=FixElevation,ComputeInstantSpeed
 gpx_extensions=none
 directory=/home/zaurelzo/kalenji_activities
 ```
-exporter.py reads the gpx file, does some checks on them to be sure that they are valid and uploads them to strava. 
-You must create a file named .env into the repository project which contain these variable
+```exporter.py``` reads the gpx files, does some checks on them to be sure that they are valid and uploads them to strava.
+
+# How It work for the garmin gps device?
+```fit-exporter.py``` reads the fit files from the mounted garmin device, chooses those who are more recent than the last strava activity
+and uploads them to strava. 
+
+
+For both devices, You must create a file named .env into the repository project which contain these variable
 ```
 CLIENT_ID=client_id_of_your_app_created_in_strava
 CLIENT_SECRET=client_secret_app_retrieve_from_strava
