@@ -131,9 +131,10 @@ def push_activity(write_token, activity_path, start_time, start_time_pattern='%Y
 
     params = {"name": device_name + " ride on " + start_time_as_string[0] + " at " + start_time_as_string[1],
               "description": "upload activity using exporter script on " + now_as_string[0] + " at " + now_as_string[1],
-              "data_type": file_format}
+              "data_type": file_format, "trainer": "Workout"}
     if on_home_trainer:
-        params["trainer"] = "1"
+        params["trainer"] = " VirtualRide"
+
     r = requests.post('https://www.strava.com/api/v3/uploads?access_token=' + write_token['access_token'],
                       files=files, data=params)
     if r.status_code < 200 or r.status_code > 300:

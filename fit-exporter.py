@@ -12,7 +12,10 @@ def select_activities_to_upload(conf, date_last_activity):
     for file in folder:
         file_path = os.path.join(conf["garmin_activities_folder"], file)
         fitfile = FitFile(file_path)
-        records = [r for r in fitfile.get_messages('record')]
+        records = []
+        for r in fitfile.get_messages('record'):
+            records.append(r)
+            break
         if len(records) > 0:
             for record_data in records[0]:
                 if record_data.name == "timestamp":
