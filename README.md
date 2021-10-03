@@ -54,3 +54,19 @@ You will be redirect to a non working page. Extract the authorization_code from 
 Same procedure as read procedure, but use the below link
 
 http://www.strava.com/oauth/authorize?client_id={client_id}&response_type=code&redirect_uri=http://localhost/exchange_token&approval_prompt=force&scope=profile:write,activity:write
+
+# TODO
+* how to automate initial authentication ? 
+ 1) use this [library](https://github.com/hozn/stravalib/tree/master/examples/strava-oauth) to retrieve the read or write token 
+ 2) transform the python script into a flask app with an authorization endpoint to retrieve the read or write code 
+```python
+client = Client()
+authorize_url = client.authorization_url(client_id=49524, redirect_uri='http://localhost:5000/authorization',
+                                              scope=["profile:read_all","activity:read_all","profile:write","activity:write"])
+
+@app.route.route('/authorization')
+def authorization():
+	code = request.args.get('code') # this a single code for read and write, you can simplify the exporter script 
+    # by using this single instead of read and write code.
+    # rest of exporter.py main code
+```
