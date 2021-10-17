@@ -3,100 +3,69 @@ import json
 import math
 import os
 import time
+import webbrowser
 
 import bs4 as bs
 import requests
 import dotenv
 from dateutil import tz
 
-# env variables
+from flask import Flask, url_for, request, jsonify
+from stravalib import Client
+
+from APIException import APIBadRequestError, StravaApiException
+
 ENV_PATH = ".env"
 CLIENT_ID = "CLIENT_ID"
 CLIENT_SECRET = "CLIENT_SECRET"
-# TODO :  when get_authorization_code will be implemented, you will not need this var anymore
-READ_AUTHORIZATION_CODE = "READ_AUTHORIZATION_CODE"
-WRITE_AUTHORIZATION_CODE = "WRITE_AUTHORIZATION_CODE"
-READ_TOKEN = "READ_TOKEN"
-WRITE_TOKEN = "WRITE_TOKEN"
+TOKEN = "TOKEN"
+AUTHORIZATION_CODE = "AUTHORIZATION_CODE"
 
 
 # authenticate the user and return a read or write token api
-def authenticate(op_type):
-    token = None
-    authorization_code = None
-    rw_token = None
-    rw_code = None
-    if op_type == "READ":
-        rw_token = READ_TOKEN
-        rw_code = READ_AUTHORIZATION_CODE
-        token = os.getenv(READ_TOKEN)
-        authorization_code = os.getenv(READ_AUTHORIZATION_CODE)
-    elif op_type == "WRITE":
-        rw_token = WRITE_TOKEN
-        rw_code = WRITE_AUTHORIZATION_CODE
-        token = os.getenv(WRITE_TOKEN)
-        authorization_code = os.getenv(WRITE_AUTHORIZATION_CODE)
-    else:
-        print(op_type + " is a non supported operation")
-        exit(1)
-
-    assert authorization_code is not None, "For " + op_type + " operation, you need to retrieve a " + op_type \
-                                           + " authorization code and set " + rw_code \
-                                           + " variable in the " + ENV_PATH + " file. See README instructions."
+def refresh_token():
     client_id = os.getenv(CLIENT_ID)
+    if client_id is None:
+        raise APIBadRequestError(
+            "Env var " + CLIENT_ID + " is required. Copy its value from your strava account")
     client_secret = os.getenv(CLIENT_SECRET)
-    assert client_id is not None, "Env var " + CLIENT_ID + " is required. Copy its value from your strava account"
-    assert client_secret is not None, "Env var " + CLIENT_SECRET + " is required. Copy its value from your strava account"
+    if client_secret is None:
+        raise APIBadRequestError(
+            "Env var " + CLIENT_SECRET + " is required. Copy its value from your strava account")
 
+    token = os.getenv(TOKEN)
     if token is not None:
         token = json.loads(token)
+        if token['expires_at'] < time.time():
+            authorization_code = os.getenv(AUTHORIZATION_CODE)
+            # Incoherent state, if the  token env variable is set, that mean that we have already retrieve a token and an
+            # authorization code. So, we should have store the authorization code
+            if authorization_code is None:
+                raise APIBadRequestError(
+                    "Incoherent state. " + TOKEN + " env variable has been set in" + ENV_PATH + " file but not the " \
+                    + AUTHORIZATION_CODE + " env variable.")
+
+            res = requests.post(
+                url='https://www.strava.com/oauth/token',
+                data={
+                    'client_id': int(client_id),
+                    'client_secret': client_secret,
+                    'code': authorization_code,
+                    'grant_type': 'refresh_token',
+                    'refresh_token': token['refresh_token']
+                }
+            )
+
+            if res.status_code < 200 or res.status_code > 300:
+                raise StravaApiException(
+                    "Cannot refresh token, http response content = " + str(res.content),
+                    res.status_code)
+                token = res.json()
+                # Save new tokens to file
+                dotenv.set_key(ENV_PATH, TOKEN, json.dumps(token))
+        return token
     else:
-        # First call, we do not yet have the read or write token, let's retrieve a authorization code and
-        # then retrieve the token
-        res = requests.post(
-            url='https://www.strava.com/oauth/token',
-            data={
-                'client_id': int(client_id),
-                'client_secret': client_secret,
-                'code': authorization_code,
-                'grant_type': 'authorization_code',
-            }
-        )
-        if res.status_code < 200 or res.status_code > 300:
-            print("Cannot retrieve " + op_type + " token ", res.content)
-            exit(1)
-        token = res.json()
-    if token['expires_at'] < time.time():
-        # Incoherent state, if the read/write token is set, that mean that we have already retrieve a read_token/write_token and an
-        # read/write authorization code. So, we should have store the authorization code
-        assert authorization_code is not None, "Incoherent state. " + rw_token + " env variable has been set in" + ENV_PATH \
-                                               + " file but not the " \
-                                               + rw_code + " env variable. See README instruction to how to retrieve " \
-                                               + op_type + " authorization code and set " + rw_code + " variable in " \
-                                               + ENV_PATH + " file"
-
-        res = requests.post(
-            url='https://www.strava.com/oauth/token',
-            data={
-                'client_id': int(client_id),
-                'client_secret': client_secret,
-                'code': authorization_code,
-                'grant_type': 'refresh_token',
-                'refresh_token': token['refresh_token']
-            }
-        )
-
-        if res.status_code < 200 or res.status_code > 300:
-            print("Cannot retrieve " + op_type + " token ", res.content)
-            exit(1)
-        token = res.json()  # Save new tokens to file
-    if op_type == "READ":
-        dotenv.set_key(ENV_PATH, READ_TOKEN, json.dumps(token))
-        dotenv.set_key(ENV_PATH, READ_AUTHORIZATION_CODE, authorization_code)
-    elif op_type == "WRITE":
-        dotenv.set_key(ENV_PATH, WRITE_TOKEN, json.dumps(token))
-        dotenv.set_key(ENV_PATH, WRITE_AUTHORIZATION_CODE, authorization_code)
-    return token
+        raise ValueError("Please retrieve a new token using a new authorization code")
 
 
 # retrieve last uploaded activity infos from strava in json format
@@ -106,8 +75,8 @@ def get_last_activity(read_token):
     # change per_page (up to 200) and page (1,2,3 etc.) to retrieve more activities
     r = requests.get(url + '?access_token=' + access_token + '&per_page=1' + '&page=1')
     if r.status_code < 200 or r.status_code > 300:
-        print("Cannot retrieve last activity ", r.content)
-        exit(1)
+        raise StravaApiException("Cannot retrieve last activity, response message = "
+                                 + str(r.content), r.status_code)
     info = r.content[1:len(r.content) - 1]
     return json.loads(info)
 
@@ -138,8 +107,8 @@ def push_activity(write_token, activity_path, start_time, start_time_pattern='%Y
     r = requests.post('https://www.strava.com/api/v3/uploads?access_token=' + write_token['access_token'],
                       files=files, data=params)
     if r.status_code < 200 or r.status_code > 300:
-        print("Cannot push activity " + activity_path, r.content)
-        exit(1)
+        raise StravaApiException("Cannot push activity " + activity_path + " response message = " + str(r.content),
+                                 r.status_code)
     return r.json()
 
 
@@ -148,8 +117,8 @@ def check_upload(write_token, activity_id, activity_path):
     r = requests.get(
         'https://www.strava.com/api/v3/uploads/' + activity_id + '?access_token=' + write_token['access_token'])
     if r.status_code < 200 or r.status_code > 300:
-        print("Cannot check upload status for activity " + activity_path, r.content)
-        exit(1)
+        raise StravaApiException("Cannot check upload status for activity " + activity_path + " , response message = " +
+                                 str(r.content), r.status_code)
     return r.json()
 
 
@@ -224,8 +193,8 @@ def load_conf_file(required_params):
             print("Ignore line : ", line, " , should follow pattern 'key:value'")
     for key in required_params:
         if key[0] not in conf_as_json:
-            print("Key " + key[0] + " is required in configuration file. it definition is : " + key[1])
-            exit(1)
+            raise APIBadRequestError(
+                "Key " + key[0] + " is required in configuration file. it definition is : " + key[1])
     return conf_as_json
 
 
@@ -245,27 +214,110 @@ def check_valid_env_file(path_to_file):
     with  open(path_to_file, 'r') as file_content:
         contents = file_content.read()
         if not contents.endswith("\n"):
-            print(path_to_file + " file must end with an empty line.")
-            exit(1)
+            raise AssertionError(path_to_file + " file must end with an empty line.")
 
 
-if __name__ == "__main__":
+app = Flask(__name__)
+
+
+@app.errorhandler(StravaApiException)
+@app.errorhandler(APIBadRequestError)
+def handle_exception(err):
+    response = {"error": err.description, "message": ""}
+    if len(err.args) > 0:
+        response["message"] = err.args[0]
+    # Add some logging so that we can monitor different types of errors
+    return jsonify(response), err.code
+
+
+@app.errorhandler(500)
+def handle_exception(err):
+    response = {"error": "Unknown Exception", "message": str(err)}
+    return jsonify(response), 500
+
+
+@app.route('/authorization')
+def authorization():
+    authorization_code = request.args.get('code')
+    token = refresh_token(authorization_code)
+    uploaded_activities = internal_upload(token)
+    # TODO return uploaded_activities as json
+
+
+def retrieve_new_token(authorization_code):
+    client_id = os.getenv(CLIENT_ID)
+    if client_id is None:
+        raise AssertionError(
+            "Env var " + CLIENT_ID + " is required. Copy its value from your strava account")
+    client_secret = os.getenv(CLIENT_SECRET)
+    if client_secret is None:
+        raise AssertionError(
+            "Env var " + CLIENT_SECRET + " is required. Copy its value from your strava account")
+
+    res = requests.post(
+        url='https://www.strava.com/oauth/token',
+        data={
+            'client_id': int(client_id),
+            'client_secret': client_secret,
+            'code': authorization_code,
+            'grant_type': 'authorization_code',
+        }
+    )
+    if res.status_code < 200 or res.status_code > 300:
+        raise StravaApiException(
+            "Cannot retrieve new token, http response content" + str(res.content),
+            res.status_code)
+    token = res.json()
+    # Save new tokens to file
+    dotenv.set_key(ENV_PATH, TOKEN, json.dumps(token))
+    return token
+
+
+def upload_with_new_authoriaztion_code():
+    client = Client()
+    client_id = os.getenv(CLIENT_ID)
+    if client_id is None:
+        raise AssertionError(
+            "Env var " + CLIENT_ID + " is required. Copy its value from your strava account")
+    client_secret = os.getenv(CLIENT_SECRET)
+    if client_secret is None:
+        raise AssertionError(
+            "Env var " + CLIENT_SECRET + " is required. Copy its value from your strava account")
+    authorize_url = client.authorization_url(client_id=client_id,
+                                             redirect_uri=url_for(".authorization", _external=True),
+                                             scope=["profile:read_all", "activity:read_all", "profile:write",
+                                                    "activity:write"])
+    # ask a user to provide access to his strava account, then code the authorization endpoint to upload  activities
+    #TODO: open is the same tab
+    webbrowser.open(authorize_url, new=0)
+
+
+@app.route("/upload")
+def upload():
     check_valid_env_file(ENV_PATH)
     # load env variable
     dotenv.load_dotenv(ENV_PATH)
+    try:
+        token = refresh_token()
+        uploaded_activities = internal_upload(token)
+        # TODO return uploaded_activities as json
+    except ValueError as e:
+        print(e)
+        upload_with_new_authoriaztion_code()
+
+
+def internal_upload(token):
     configuration = load_conf_file([("activities_folder", "Path to folder which contains activities"),
                                     ("max_dist",
                                      "up to this distance in km, consider that the acitivity may contain a bad geopoint")])
-    read_token = authenticate("READ")
-    last_activity_info = get_last_activity(read_token)
+    last_activity_info = get_last_activity(token)
     print("Computing from " + configuration["activities_folder"] + " activities to upload. Last activity date is " +
           last_activity_info['start_date'])
     activities = select_activities_to_upload(configuration, last_activity_info['start_date'])
     if len(activities) == 0:
-        print("No activity to upload")
-        exit(1)
+        return {"message": "No activity to upload"}, 200
+
     print("Trying to upload these activities ", activities)
-    write_token = authenticate("WRITE")
     pushed_infos = {}
     for activity_path, start_time in activities:
         dist, enjoy_time = compute_activity_stats(activity_path)
@@ -280,22 +332,22 @@ if __name__ == "__main__":
             delete_last_activity_geo_point(activity_path)
             dist, enjoy_time = compute_activity_stats(activity_path)
         if dist > float(configuration["max_dist"]):
-            print(" Cannot Fix activity " + activity_path + " , dist=" + str(
+            raise APIBadRequestError(" Cannot Fix activity " + activity_path + " , dist=" + str(
                 dist) + " km and time=" + str(enjoy_time) + " minutes. Max activity distance is"
-                  + configuration["max_dist"] + " km. Bailing out.")
-            exit(1)
-        info = push_activity(write_token, activity_path, start_time)
+                                     + configuration["max_dist"] + " km. Bailing out.")
+        info = push_activity(token, activity_path, start_time)
         pushed_infos[info["id_str"]] = (activity_path, dist, enjoy_time)
     for activity_id, value in pushed_infos.items():
         activity_path, dist, enjoy_time = value
-        checked = check_upload(write_token, activity_id, activity_path)
+        checked = check_upload(token, activity_id, activity_path)
+        # TODO : build result list to return
         while "processed" in checked["status"]:
             print("Current Status is '" + checked[
                 "status"] + "' .Checking new processing status for the id " + activity_id + " associate to the activity " + activity_path)
             # strava advise to wait 8 second before checking if you activity is ready ( increase this value if you're consumming
             # lot of api calls)
             time.sleep(8)
-            checked = check_upload(write_token, activity_id, activity_path)
+            checked = check_upload(token, activity_id, activity_path)
         if "ready" in checked["status"]:
             print("For pushed activity " + activity_path + " dist=" + str(dist) + "km, time=" + str(
                 enjoy_time) + "minutes")

@@ -65,7 +65,7 @@ if __name__ == '__main__':
     # load env variable
     dotenv.load_dotenv(exporter.ENV_PATH)
     configuration = exporter.load_conf_file([("garmin_activities_folder", "Path to folder which contains activities")])
-    read_token = exporter.authenticate("READ")
+    read_token = exporter.refresh_token("READ")
     last_activity_info = exporter.get_last_activity(read_token)
     print("Last activity date is " +
           last_activity_info['start_date'] + ". Computing from " + configuration[
@@ -75,7 +75,7 @@ if __name__ == '__main__':
         print("No activity to upload")
         exit(1)
     print("Trying to upload these activities ", activities)
-    write_token = exporter.authenticate("WRITE")
+    write_token = exporter.refresh_token("WRITE")
     pushed_infos = {}
     for activity_path, start_time in activities:
         dist, enjoy_time = compute_activity_stats(activity_path)
