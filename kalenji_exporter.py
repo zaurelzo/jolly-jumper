@@ -1,6 +1,5 @@
 import datetime
 import json
-import math
 import os
 import time
 import webbrowser
@@ -8,118 +7,18 @@ import webbrowser
 import bs4 as bs
 import requests
 import dotenv
-from dateutil import tz
 
 from flask import Flask, url_for, request, jsonify
 from stravalib import Client
 
 from APIException import APIBadRequestError, StravaApiException
+from utils import get_last_activity, push_activity, check_upload, haversine, load_conf_file, check_valid_env_file, \
+    refresh_token
 
-ENV_PATH = ".env"
-CLIENT_ID = "CLIENT_ID"
-CLIENT_SECRET = "CLIENT_SECRET"
-TOKEN = "TOKEN"
-AUTHORIZATION_CODE = "AUTHORIZATION_CODE"
+
 
 
 # authenticate the user and return a read or write token api
-def refresh_token():
-    client_id = os.getenv(CLIENT_ID)
-    if client_id is None:
-        raise APIBadRequestError(
-            "Env var " + CLIENT_ID + " is required. Copy its value from your strava account")
-    client_secret = os.getenv(CLIENT_SECRET)
-    if client_secret is None:
-        raise APIBadRequestError(
-            "Env var " + CLIENT_SECRET + " is required. Copy its value from your strava account")
-
-    token = os.getenv(TOKEN)
-    if token is not None:
-        token = json.loads(token)
-        if token['expires_at'] < time.time():
-            authorization_code = os.getenv(AUTHORIZATION_CODE)
-            # Incoherent state, if the  token env variable is set, that mean that we have already retrieve a token and an
-            # authorization code. So, we should have store the authorization code
-            if authorization_code is None:
-                raise APIBadRequestError(
-                    "Incoherent state. " + TOKEN + " env variable has been set in" + ENV_PATH + " file but not the " \
-                    + AUTHORIZATION_CODE + " env variable.")
-
-            res = requests.post(
-                url='https://www.strava.com/oauth/token',
-                data={
-                    'client_id': int(client_id),
-                    'client_secret': client_secret,
-                    'code': authorization_code,
-                    'grant_type': 'refresh_token',
-                    'refresh_token': token['refresh_token']
-                }
-            )
-
-            if res.status_code < 200 or res.status_code > 300:
-                raise StravaApiException(
-                    "Cannot refresh token, http response content = " + str(res.content),
-                    res.status_code)
-                token = res.json()
-                # Save new tokens to file
-                dotenv.set_key(ENV_PATH, TOKEN, json.dumps(token))
-        return token
-    else:
-        raise ValueError("Please retrieve a new token using a new authorization code")
-
-
-# retrieve last uploaded activity infos from strava in json format
-def get_last_activity(read_token):
-    url = "https://www.strava.com/api/v3/activities"
-    access_token = read_token['access_token']
-    # change per_page (up to 200) and page (1,2,3 etc.) to retrieve more activities
-    r = requests.get(url + '?access_token=' + access_token + '&per_page=1' + '&page=1')
-    if r.status_code < 200 or r.status_code > 300:
-        raise StravaApiException("Cannot retrieve last activity, response message = "
-                                 + str(r.content), r.status_code)
-    info = r.content[1:len(r.content) - 1]
-    return json.loads(info)
-
-
-# upload an activity to strava
-def push_activity(write_token, activity_path, start_time, start_time_pattern='%Y-%m-%dT%H:%M:%SZ',
-                  device_name="kalenji", file_format="gpx", on_home_trainer=False):
-    files = {'file': open(activity_path, 'rb')}
-    # now date is local time aware
-    now_as_string = datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S")
-    now_as_string = now_as_string.split(" ")
-
-    # convert start_time using local timezone
-    start_time_object = datetime.datetime.strptime(start_time, start_time_pattern)
-    to_zone = tz.tzlocal()
-    from_zone = tz.tzutc()
-    start_time_object = start_time_object.replace(tzinfo=from_zone)
-    start_time_object = start_time_object.astimezone(to_zone)
-    start_time_as_string = start_time_object.strftime("%d-%m-%Y %H:%M:%S")
-    start_time_as_string = start_time_as_string.split(" ")
-
-    params = {"name": device_name + " ride on " + start_time_as_string[0] + " at " + start_time_as_string[1],
-              "description": "upload activity using exporter script on " + now_as_string[0] + " at " + now_as_string[1],
-              "data_type": file_format, "trainer": "Workout"}
-    if on_home_trainer:
-        params["trainer"] = " VirtualRide"
-
-    r = requests.post('https://www.strava.com/api/v3/uploads?access_token=' + write_token['access_token'],
-                      files=files, data=params)
-    if r.status_code < 200 or r.status_code > 300:
-        raise StravaApiException("Cannot push activity " + activity_path + " response message = " + str(r.content),
-                                 r.status_code)
-    return r.json()
-
-
-# verifiy the status of an uploaded acitvity (processed, ready , duplicate etc.)
-def check_upload(write_token, activity_id, activity_path):
-    r = requests.get(
-        'https://www.strava.com/api/v3/uploads/' + activity_id + '?access_token=' + write_token['access_token'])
-    if r.status_code < 200 or r.status_code > 300:
-        raise StravaApiException("Cannot check upload status for activity " + activity_path + " , response message = " +
-                                 str(r.content), r.status_code)
-    return r.json()
 
 
 # return the following infos for an activity : (distance in km, time in minutes)
@@ -146,18 +45,7 @@ def compute_activity_stats(path_to_file):
     return (dist_in_meters / 1000), (total_activity_time_in_seconds / 60)
 
 
-# compute the distance in meter between two geo points
-# taken from https://janakiev.com/blog/gps-points-distance-python/
-def haversine(coord1, coord2):
-    R = 6372800  # Earth radius in meters
-    lat1, lon1 = coord1
-    lat2, lon2 = coord2
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lon2 - lon1)
-    a = math.sin(dphi / 2) ** 2 + \
-        math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
-    return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
 
 
 # select activities to upload base on the date of the last uploaded activity
@@ -180,24 +68,6 @@ def select_activities_to_upload(conf, date_last_activity):
     return activities_to_upload
 
 
-def load_conf_file(required_params):
-    # load conf file
-    content = open("configuration", 'r').read().split("\n")
-    # print(type(content))
-    conf_as_json = {}
-    for line in content:
-        key_and_val = line.split(":")
-        if len(key_and_val) == 2:
-            conf_as_json[key_and_val[0]] = key_and_val[1]
-        else:
-            print("Ignore line : ", line, " , should follow pattern 'key:value'")
-    for key in required_params:
-        if key[0] not in conf_as_json:
-            raise APIBadRequestError(
-                "Key " + key[0] + " is required in configuration file. it definition is : " + key[1])
-    return conf_as_json
-
-
 # I dont'know why, but sometimes, the kalenji watch record one last geo bad point which will increase
 # the distance of an acitvity. This function just remove the last geo point of the activity
 def delete_last_activity_geo_point(path_to_file):
@@ -208,13 +78,6 @@ def delete_last_activity_geo_point(path_to_file):
             (activities_coords[len(activities_coords) - 1]).extract()
             with open(path_to_file, "w") as file:
                 file.write(str(soup))
-
-
-def check_valid_env_file(path_to_file):
-    with  open(path_to_file, 'r') as file_content:
-        contents = file_content.read()
-        if not contents.endswith("\n"):
-            raise AssertionError(path_to_file + " file must end with an empty line.")
 
 
 app = Flask(__name__)
@@ -306,7 +169,7 @@ def upload():
         upload_with_new_authoriaztion_code()
 
 
-def internal_upload(token):
+def internal_upload(token,last):
     configuration = load_conf_file([("activities_folder", "Path to folder which contains activities"),
                                     ("max_dist",
                                      "up to this distance in km, consider that the acitivity may contain a bad geopoint")])

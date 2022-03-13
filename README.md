@@ -55,6 +55,18 @@ Same procedure as read procedure, but use the below link
 
 http://www.strava.com/oauth/authorize?client_id={client_id}&response_type=code&redirect_uri=http://localhost/exchange_token&approval_prompt=force&scope=profile:write,activity:write
 
+# Configure development environment
+```
+# create venv and activate it
+python3 -m venv venv && source venv/bin/activate
+# install libs 
+pip install -r requirements.txt 
+# run test 
+pytest
+# launch flask app 
+FLASK_APP=garmin_exporter python -m flask run
+``` 
+
 # TODO
 * how to automate initial authentication ? 
  1) use this [library](https://github.com/hozn/stravalib/tree/master/examples/strava-oauth) to retrieve the read or write token 
@@ -68,5 +80,5 @@ authorize_url = client.authorization_url(client_id=49524, redirect_uri='http://l
 def authorization():
 	code = request.args.get('code') # this a single code for read and write, you can simplify the exporter script 
     # by using this single instead of read and write code.
-    # rest of exporter.py main code
+    # rest of kalenji_exporter.py main code
 ```
