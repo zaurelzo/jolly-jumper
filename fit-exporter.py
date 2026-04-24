@@ -1,102 +1,227 @@
 from fitparse import FitFile
 import exporter
-import math, time, datetime, os, dotenv
+import math
+import time
+import datetime
+import os
+import dotenv
 
 
-# select activities to upload base on the date of the last uploaded activity
-# return an array of the following tuple : (activity_path, starting_time_of_the_activity)
-def select_activities_to_upload(conf, date_last_activity):
-    folder = os.listdir(conf["garmin_activities_folder"])
-    last_date = datetime.datetime.strptime(date_last_activity, '%Y-%m-%dT%H:%M:%SZ')
-    activities_to_upload = []
-    for file in folder:
-        file_path = os.path.join(conf["garmin_activities_folder"], file)
-        fitfile = FitFile(file_path)
-        records = []
-        for r in fitfile.get_messages('record'):
-            records.append(r)
-            break
-        if len(records) > 0:
-            for record_data in records[0]:
-                if record_data.name == "timestamp":
-                    starting_time = record_data.value
-                    # starting_time_as_object = datetime.datetime.strptime(starting_time, '%Y-%m-%d %H:%M:%S')
-                    if starting_time > last_date:
-                        activities_to_upload.append((file_path, starting_time.strftime('%Y-%m-%d %H:%M:%S')))
-        else:
-            print("No record for this activity " + file_path)
+def load_config():
+    """
+    Load environment variables and configuration file.
 
-    # sort on activity name, older activity will be uploaded first
-    activities_to_upload.sort(key=lambda elt: elt[0])
-    return activities_to_upload
-
-
-# return the following infos for an activity : (distance in km, time in minutes)
-def compute_activity_stats(path_to_file):
-    fitfile = FitFile(path_to_file)
-    records = [r for r in fitfile.get_messages('record')]
-    assert len(records) >= 2, path_to_file + "activity must contain at least two records"
-    id1, id2 = 0, 1
-    dist_in_meters = 0
-    total_activity_time_in_seconds = 0
-    while id2 < len(records):
-        record_data1 = {r.name: r.value for r in records[id1]}
-        record_data2 = {r.name: r.value for r in records[id2]}
-        if record_data1.get("position_lat") is not None:
-            lat1, long1 = float(record_data1["position_lat"] * 180 / math.pow(2, 31)), float(
-                record_data1["position_long"] * 180 / math.pow(2, 31))
-            lat2, long2 = float(record_data2["position_lat"] * 180 / math.pow(2, 31)), float(
-                record_data2["position_long"] * 180 / math.pow(2, 31))
-            dist_in_meters += exporter.haversine((lat1, long1), (lat2, long2))
-        if record_data1.get("timestamp"):
-            date2 = record_data2["timestamp"]
-            date1 = record_data1["timestamp"]
-            elapsed_time = date2 - date1
-            minutes, seconds = divmod(elapsed_time.total_seconds(), 60)
-            # print(date2, date1, "=====", minutes, seconds)
-            total_activity_time_in_seconds = total_activity_time_in_seconds + seconds + minutes * 60
-            # total_activity_time_in_seconds = total_activity_time_in_seconds + 5
-        id1, id2 = id1 + 1, id2 + 1
-    return (dist_in_meters / 1000), (total_activity_time_in_seconds / 60)
-
-
-if __name__ == '__main__':
+    - Ensures the .env file exists and is valid
+    - Loads environment variables (Strava credentials, etc.)
+    - Loads user configuration (e.g., activities folder)
+    """
     exporter.check_valid_env_file(exporter.ENV_PATH)
-    # load env variable
     dotenv.load_dotenv(exporter.ENV_PATH)
-    configuration = exporter.load_conf_file([("garmin_activities_folder", "Path to folder which contains activities")])
-    read_token = exporter.authenticate("READ")
-    last_activity_info = exporter.get_last_activity(read_token)
-    print("Last activity date is " +
-          last_activity_info['start_date'] + ". Computing from " + configuration[
-              "garmin_activities_folder"] + " activities to upload.")
-    activities = select_activities_to_upload(configuration, last_activity_info['start_date'])
-    if len(activities) == 0:
-        print("No activity to upload")
-        exit(1)
-    print("Trying to upload these activities ", activities)
-    write_token = exporter.authenticate("WRITE")
-    pushed_infos = {}
-    for activity_path, start_time in activities:
-        dist, enjoy_time = compute_activity_stats(activity_path)
-        on_home_trainer = False
-        if dist == 0.0:
-            on_home_trainer = True
-        info = exporter.push_activity(write_token, activity_path, start_time, start_time_pattern='%Y-%m-%d %H:%M:%S',
-                                      device_name="Garmin", file_format="fit", on_home_trainer=on_home_trainer)
-        pushed_infos[info["id_str"]] = (activity_path, dist, enjoy_time)
-    for activity_id, value in pushed_infos.items():
-        activity_path, dist, enjoy_time = value
-        checked = exporter.check_upload(write_token, activity_id, activity_path)
-        while "processed" in checked["status"]:
-            print("Current Status is '" + checked[
-                "status"] + "' .Checking new processing status for the id " + activity_id + " associate to the activity " + activity_path)
-            # strava advise to wait 8 second before checking if you activity is ready ( increase this value if you're consumming
-            # lot of api calls)
+
+    return exporter.load_conf_file([
+        ("garmin_activities_folder", "Path to folder containing activities")
+    ])
+
+
+def get_last_activity_date():
+    """
+    Retrieve the date of the last activity uploaded to Strava.
+
+    This is used as a reference point to avoid re-uploading old activities.
+    """
+    token = exporter.authenticate("READ")
+    activity = exporter.get_last_activity(token)
+    return activity["start_date"]
+
+
+def select_activities_to_upload(conf, last_activity_date):
+    """
+    Select FIT files that are newer than the last uploaded Strava activity.
+
+    Returns:
+        List of tuples: (file_path, formatted_start_time)
+    """
+    folder = conf["garmin_activities_folder"]
+
+    # Convert Strava date string into a datetime object
+    last_date = datetime.datetime.strptime(
+        last_activity_date, "%Y-%m-%dT%H:%M:%SZ"
+    )
+
+    activities = []
+
+    # Iterate over all files in the Garmin folder
+    for filename in os.listdir(folder):
+        file_path = os.path.join(folder, filename)
+
+        # Parse FIT file
+        fitfile = FitFile(file_path)
+
+        # Get the first record (contains start timestamp)
+        first_record = next(fitfile.get_messages("record"), None)
+
+        if not first_record:
+            print(f"No record found for {file_path}")
+            continue
+
+        # Extract timestamp from first record
+        for field in first_record:
+            if field.name == "timestamp":
+                start_time = field.value
+
+                # Keep only activities newer than last uploaded
+                if start_time > last_date:
+                    activities.append(
+                        (file_path, start_time.strftime("%Y-%m-%d %H:%M:%S"))
+                    )
+                break
+
+    # Sort activities so older ones are uploaded first
+    activities.sort(key=lambda x: x[0])
+    return activities
+
+
+def compute_activity_stats(file_path):
+    """
+    Compute basic statistics for an activity:
+    - Total distance (in km)
+    - Total duration (in minutes)
+
+    Distance is computed using the haversine formula between GPS points.
+    Time is computed from timestamp differences.
+    """
+    fitfile = FitFile(file_path)
+    records = list(fitfile.get_messages("record"))
+
+    # Ensure we have enough data points
+    if len(records) < 2:
+        raise ValueError(f"{file_path} must contain at least two records")
+
+    total_distance = 0  # meters
+    total_time = 0      # seconds
+
+    for r1, r2 in zip(records, records[1:]):
+        data1 = {f.name: f.value for f in r1}
+        data2 = {f.name: f.value for f in r2}
+
+        # --- Distance computation ---
+        # Convert Garmin semicircles to degrees
+        if data1.get("position_lat") is not None:
+            lat1 = data1["position_lat"] * 180 / (2**31)
+            lon1 = data1["position_long"] * 180 / (2**31)
+            lat2 = data2["position_lat"] * 180 / (2**31)
+            lon2 = data2["position_long"] * 180 / (2**31)
+
+            # Add distance between two GPS points
+            total_distance += exporter.haversine((lat1, lon1), (lat2, lon2))
+
+        # --- Time computation ---
+        if data1.get("timestamp") and data2.get("timestamp"):
+            delta = data2["timestamp"] - data1["timestamp"]
+            total_time += delta.total_seconds()
+
+    # Convert to km and minutes
+    return total_distance / 1000, total_time / 60
+
+
+def upload_activities(activities):
+    """
+    Upload activities to Strava.
+
+    Returns:
+        token: authentication token used for upload
+        uploaded: dict mapping activity_id -> (file_path, distance, duration)
+    """
+    token = exporter.authenticate("WRITE")
+    uploaded = {}
+
+    for file_path, start_time in activities:
+        # Compute stats before upload (used for logging)
+        distance, duration = compute_activity_stats(file_path)
+
+        # Detect indoor activity (no GPS distance)
+        is_home_trainer = distance == 0.0
+
+        # Upload activity to Strava
+        response = exporter.push_activity(
+            token,
+            file_path,
+            start_time,
+            start_time_pattern="%Y-%m-%d %H:%M:%S",
+            device_name="Garmin",
+            file_format="fit",
+            on_home_trainer=is_home_trainer,
+        )
+
+        # Store metadata for later status tracking
+        uploaded[response["id_str"]] = (file_path, distance, duration)
+
+    return token, uploaded
+
+
+def wait_for_uploads(token, uploaded):
+    """
+    Poll Strava until all uploads are processed.
+
+    Strava processes uploads asynchronously, so we must:
+    - Check status repeatedly
+    - Wait between checks (to avoid hitting API limits)
+    """
+    for activity_id, (file_path, distance, duration) in uploaded.items():
+        status = exporter.check_upload(token, activity_id, file_path)
+
+        # Keep checking while processing is ongoing
+        while "processed" in status["status"]:
+            print(f"Processing {file_path}... status={status['status']}")
+
+            # Strava recommends waiting ~8 seconds between checks
             time.sleep(8)
-            checked = exporter.check_upload(write_token, activity_id, activity_path)
-        if "ready" in checked["status"]:
-            print("For pushed activity " + activity_path + " dist=" + str(dist) + "km, time=" + str(
-                enjoy_time) + "minutes")
+
+            status = exporter.check_upload(token, activity_id, file_path)
+
+        # Final result
+        if "ready" in status["status"]:
+            print(
+                f"Uploaded {file_path} | "
+                f"distance={distance:.2f} km | time={duration:.2f} min"
+            )
         else:
-            print("Error when check upload status for activity " + activity_path, checked)
+            print(f"Error uploading {file_path}: {status}")
+
+
+def main():
+    """
+    Main workflow:
+
+    1. Load configuration
+    2. Get last uploaded activity from Strava
+    3. Select new activities from Garmin folder
+    4. Upload them
+    5. Wait for processing to complete
+    """
+    config = load_config()
+    last_date = get_last_activity_date()
+
+    print(
+        f"Last activity date: {last_date}\n"
+        f"Scanning folder: {config['garmin_activities_folder']}"
+    )
+
+    # Step 1: Find new activities
+    activities = select_activities_to_upload(config, last_date)
+
+    if not activities:
+        print("No activities to upload.")
+        return
+
+    print(f"{len(activities)} activities to upload.")
+
+    # Step 2: Upload
+    token, uploaded = upload_activities(activities)
+
+    # Step 3: Wait for Strava processing
+    wait_for_uploads(token, uploaded)
+
+
+if __name__ == "__main__":
+    main()
