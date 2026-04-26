@@ -1,42 +1,61 @@
 #!/bin/bash
 
-# Supported devices
+set -euo pipefail
+
 GARMIN="garmin"
 KALENJI="kalenji"
+VENV_DIR=".venv"
 
-# Validate input arguments
-if [ $# -ne 1 ]; then
-  echo "[Usage] ./exporter.sh <device>"
+# -------------------------
+# Usage
+# -------------------------
+
+usage() {
+  echo "Usage: ./exporter.sh <device>"
   echo "Supported devices: $GARMIN | $KALENJI"
   exit 1
+}
+
+# -------------------------
+# Validate arguments
+# -------------------------
+
+if [ $# -ne 1 ]; then
+  usage
 fi
 
 DEVICE=$1
 
-# Garmin workflow
-if [ "$DEVICE" = "$GARMIN" ]; then
-  echo "Running Garmin exporter..."
-  python3.8 fit-exporter.py
-  exit $?
-
-# Kalenji workflow
-elif [ "$DEVICE" = "$KALENJI" ]; then
-  echo "Running Kalenji exporter..."
-
-  # Extract activities from watch
-  kalenji_reader -c watch-conf
-  if [ $? -ne 0 ]; then
-    echo "Error: kalenji_reader failed"
-    exit 1
-  fi
-
-  # Upload extracted GPX files
-  python3.8 exporter.py
-  exit $?
-
-# Unsupported device
-else
+if [ "$DEVICE" != "$GARMIN" ] && [ "$DEVICE" != "$KALENJI" ]; then
   echo "Error: unsupported device '$DEVICE'"
-  echo "Supported devices are: $GARMIN, $KALENJI"
-  exit 1
+  usage
 fi
+
+# -------------------------
+# Virtual environment setup
+# -------------------------
+
+if [ ! -d "$VENV_DIR" ]; then
+  echo "Creating virtual environment..."
+  python3 -m venv "$VENV_DIR"
+fi
+
+echo "Installing dependencies..."
+"$VENV_DIR/bin/pip" install  --upgrade pip
+"$VENV_DIR/bin/pip" install  -r requirements.txt
+
+# -------------------------
+# Kalenji pre-step: extract GPX files from watch
+# -------------------------
+
+if [ "$DEVICE" = "$KALENJI" ]; then
+  echo "Extracting activities from Kalenji watch..."
+  kalenji_reader -c watch-conf
+fi
+
+# -------------------------
+# Run unified Python exporter
+# -------------------------
+
+echo "Starting upload for device: $DEVICE"
+"$VENV_DIR/bin/python" exporter.py --device "$DEVICE"

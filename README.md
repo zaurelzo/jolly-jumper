@@ -1,32 +1,46 @@
-# Kalenji Ride Exporter
+# Strava Activity Exporter
 
-I am the happy owner of a Kalenji watch that I use to record my cycling activities.  
-I wrote this small script to export my latest rides (GPX files) from my watch to my Strava account.
+I am the happy owner of both a Kalenji watch and a Garmin Edge 520+ that I use to record my cycling activities.  
+I wrote this script to automatically export my latest rides to my Strava account.
 
-To export activities from the watch to GPX files, I used the open-source project [kalenji-gps-watch-reader](https://github.com/ColinPitrat/kalenji-gps-watch-reader).  
+To export activities from the Kalenji watch to GPX files, I used the open-source project [kalenji-gps-watch-reader](https://github.com/ColinPitrat/kalenji-gps-watch-reader).  
 [This article](https://medium.com/swlh/using-python-to-connect-to-stravas-api-and-analyse-your-activities-dummies-guide-5f49727aac86) and the [Strava documentation](https://developers.strava.com/docs/reference/) helped me understand how to use the API.
 
 ---
 
-# Garmin Exporter
+# Supported Devices
 
-The exporter also supports Garmin devices.  
-The script was tested with my Garmin Edge 520+ device, but I am confident it will work with most Garmin devices.
+| Device | Format | Argument |
+|---|---|---|
+| Kalenji (OnMove 200/220) | GPX | `kalenji` |
+| Garmin Edge 520+ (and most Garmin devices) | FIT | `garmin` |
 
 ---
 
 # How to Run
 
-Plug in your watch and run the script:
+Plug in your device and run:
 
 ```bash
-exporter.sh
+./exporter.sh <device>
 ```
 
-# How It Works (Kalenji Watch)
+Examples:
 
-`exporter.sh` creates GPX files using the configuration below and then runs exporter.py:
 ```bash
+./exporter.sh kalenji
+./exporter.sh garmin
+```
+
+---
+
+# How It Works
+
+### Kalenji
+
+`exporter.sh` first runs `kalenji_reader` to extract GPX files from the watch using the `watch-conf` configuration:
+
+```
 source=Path
 path=/media/zaurelzo/ONMOVE-220/DATA
 device=OnMove200
@@ -34,51 +48,67 @@ filters=FixElevation,ComputeInstantSpeed
 gpx_extensions=none
 directory=/home/zaurelzo/kalenji_activities
 ```
-#  How It Works (Garmin GPS Device)
 
-`fit-exporter.py` reads FIT files from the mounted Garmin device, selects those that are more recent than the last Strava activity, and uploads them to Strava.
+It then calls `exporter.py --device kalenji`, which selects GPX files newer than the last Strava activity and uploads them.
 
-#  Environment Configuration
+### Garmin
 
-For both devices, you must create a .env file in the project repository containing the following variables:
+`exporter.sh` calls `exporter.py --device garmin` directly.  
+The script reads FIT files from the configured Garmin folder, selects those newer than the last Strava activity, and uploads them. Activities with no GPS data (e.g. indoor trainer sessions) are automatically detected and tagged as virtual rides.
+
+---
+
+# Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+# Configuration
+
+Create a `configuration` file in the project folder using `key:value` format.  
+Only the keys relevant to the device you use are required:
+
+```
+# Kalenji (required for --device kalenji)
+activities_folder:/home/zaurelzo/kalenji_activities
+max_dist:100
+
+# Garmin (required for --device garmin)
+garmin_activities_folder:/media/zaurelzo/GARMIN/ACTIVITY
+```
+
+`max_dist` is a Kalenji-only setting: if an activity exceeds this distance (in km), the script attempts to fix it by removing the last GPS point (a known hardware quirk on some Kalenji models).
+
+---
+
+# Environment Configuration
+
+Create a `.env` file in the project folder:
+
 ```bash
 CLIENT_ID=client_id_of_your_app_created_in_strava
 CLIENT_SECRET=client_secret_of_your_strava_app
-READ_AUTHORIZATION_CODE=see_below
-WRITE_AUTHORIZATION_CODE=see_below
 ```
-Warning: The .env file must end with an empty line (\n).
 
-# Retrieve Authorization Codes
+> **Warning:** The `.env` file must end with an empty line (`\n`).
 
-* Retrieve Read Authorization Code
+`CLIENT_ID` and `CLIENT_SECRET` are the only values you need to set manually.  
+All other variables (`AUTHORIZATION_CODE`, `READ_TOKEN`, `WRITE_TOKEN`) are populated automatically on first run.
 
-Paste the link below into your browser. Replace {client_id} with your Strava app client ID.
-Authenticate and authorize the app with the requested permissions.
+---
 
-http://www.strava.com/oauth/authorize?client_id={client_id}&response_type=code&redirect_uri=http://localhost/exchange_token&approval_prompt=force&scope=profile:read_all,activity:read_all
+# Authorization
 
-You will be redirected to a non-working page. Extract the authorization_code from the URL:
+On the first run, the script will automatically:
 
-http://localhost/exchange_token?state=&code={authorization_code}&scope=read,activity:read_all,profile:read_all
+1. Open the Strava authorization page in your browser
+2. Ask you to log in and click **Authorize**
+3. Capture the authorization code via a temporary local server on `http://localhost:5000`
+4. Save the code and tokens to your `.env` file
 
-* Retrieve Write Authorization Code
-
-Follow the same procedure as above, but use this link:
-
-http://www.strava.com/oauth/authorize?client_id={client_id}&response_type=code&redirect_uri=http://localhost/exchange_token&approval_prompt=force&scope=profile:write,activity:write
-
-# TODO
-1. Automate Initial Authentication. Use this library to retrieve the read/write token: https://github.com/hozn/stravalib/tree/master/examples/strava-oauth
-2. Transform the Python script into a Flask app with an authorization endpoint to retrieve the code:
-```python
-client = Client()
-authorize_url = client.authorization_url(client_id=49524, redirect_uri='http://localhost:5000/authorization',
-                                              scope=["profile:read_all","activity:read_all","profile:write","activity:write"])
-
-@app.route.route('/authorization')
-def authorization():
-	code = request.args.get('code') # this a single code for read and write, you can simplify the exporter script 
-    # by using this single instead of read and write code.
-    # rest of exporter.py main code
-```
+On subsequent runs, the stored tokens are reused silently.  
+If a token expires, it is refreshed automatically.  
+If the refresh token itself becomes invalid (e.g. you revoked access in Strava settings), the script detects this and re-opens the browser to re-authorize — no manual steps needed.
