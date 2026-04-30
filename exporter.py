@@ -200,6 +200,64 @@ def get_last_activity(token):
     return res.json()[0]
 
 
+def get_bikes(token):
+    """Retrieve all bikes registered on the athlete's Strava account."""
+    res = requests.get(
+        "https://www.strava.com/api/v3/athlete",
+        params={"access_token": token["access_token"]},
+    )
+    if not res.ok:
+        raise RuntimeError(f"Cannot retrieve athlete info: {res.content}")
+    return res.json().get("bikes", [])
+
+
+def set_activity_bike(token, activity_id, gear_id):
+    """Assign a bike to an already-uploaded Strava activity."""
+    res = requests.put(
+        f"https://www.strava.com/api/v3/activities/{activity_id}",
+        params={"access_token": token["access_token"]},
+        data={"gear_id": gear_id},
+    )
+    if not res.ok:
+        raise RuntimeError(f"Cannot set bike for activity {activity_id}: {res.content}")
+
+
+def resolve_bike(token, no_bike):
+    """
+    Interactively resolve which bike to assign to uploaded activities.
+
+    - If --no-bike is passed: skip silently
+    - If no bikes on account: warn and skip
+    - Otherwise: show available bikes and prompt the user to pick one
+    """
+    if no_bike:
+        return None
+
+    bikes = get_bikes(token)
+
+    if not bikes:
+        print("Warning: no bikes found on your Strava account. Uploading without bike assignment.")
+        return None
+
+    print("\nAvailable bikes:")
+    for i, bike in enumerate(bikes, 1):
+        print(f"  {i}. {bike['name']} (id: {bike['id']})")
+    print(f"  {len(bikes) + 1}. Skip bike assignment")
+
+    while True:
+        try:
+            choice = int(input("\nSelect a bike (number): "))
+            if choice == len(bikes) + 1:
+                return None
+            if 1 <= choice <= len(bikes):
+                selected = bikes[choice - 1]
+                print(f"Bike selected: {selected['name']}")
+                return selected["id"]
+            print(f"Please enter a number between 1 and {len(bikes) + 1}.")
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+
+
 def time_of_day(dt):
     """
     Return a time-of-day label based on the hour of the activity.
@@ -262,8 +320,11 @@ def check_upload(token, activity_id):
     return res.json()
 
 
-def wait_for_uploads(token, uploaded):
-    """Poll Strava until all uploads are ready or errored."""
+def wait_for_uploads(token, uploaded, gear_id=None):
+    """
+    Poll Strava until all uploads are ready or errored.
+    If gear_id is provided, assigns the bike once the activity is ready.
+    """
     for activity_id, (path, dist, duration) in uploaded.items():
         status = check_upload(token, activity_id)
 
@@ -273,7 +334,12 @@ def wait_for_uploads(token, uploaded):
             status = check_upload(token, activity_id)
 
         if "ready" in status["status"]:
-            print(f"Uploaded {path} | {dist:.2f} km | {duration:.2f} min")
+            strava_id = status.get("activity_id")
+            if gear_id and strava_id:
+                set_activity_bike(token, strava_id, gear_id)
+                print(f"Uploaded {path} | {dist:.2f} km | {duration:.2f} min | bike set")
+            else:
+                print(f"Uploaded {path} | {dist:.2f} km | {duration:.2f} min")
         else:
             print(f"Error for {path}: {status}")
 
@@ -420,7 +486,7 @@ def compute_fit_stats(path):
 # Upload pipelines
 # =========================
 
-def run_gpx_pipeline(conf, last_date_str, token):
+def run_gpx_pipeline(conf, last_date_str, token, gear_id=None):
     """Upload pipeline for Kalenji GPX files."""
     folder = conf.get("activities_folder")
     if not folder:
@@ -452,10 +518,10 @@ def run_gpx_pipeline(conf, last_date_str, token):
         res = push_activity(token, path, start_time, file_format="gpx")
         uploaded[res["id_str"]] = (path, dist, duration)
 
-    wait_for_uploads(token, uploaded)
+    wait_for_uploads(token, uploaded, gear_id)
 
 
-def run_fit_pipeline(conf, last_date_str, token):
+def run_fit_pipeline(conf, last_date_str, token, gear_id=None):
     """Upload pipeline for Garmin FIT files."""
     folder = conf.get("garmin_activities_folder")
     if not folder:
@@ -489,7 +555,7 @@ def run_fit_pipeline(conf, last_date_str, token):
         )
         uploaded[res["id_str"]] = (path, dist, duration)
 
-    wait_for_uploads(token, uploaded)
+    wait_for_uploads(token, uploaded, gear_id)
 
 
 # =========================
@@ -567,6 +633,11 @@ def main():
         choices=["kalenji", "garmin"],
         help="Device type to export from",
     )
+    parser.add_argument(
+        "--no-bike",
+        action="store_true",
+        help="Skip bike assignment and upload without setting a bike",
+    )
     args = parser.parse_args()
 
     check_env_file(ENV_PATH)
@@ -582,10 +653,13 @@ def main():
     last_date_str = last_activity["start_date"]
     print(f"Last Strava activity: {last_date_str}")
 
+    # Resolve bike selection interactively (unless --no-bike is passed)
+    gear_id = resolve_bike(token, no_bike=args.no_bike)
+
     if args.device == "kalenji":
-        run_gpx_pipeline(conf, last_date_str, token)
+        run_gpx_pipeline(conf, last_date_str, token, gear_id)
     elif args.device == "garmin":
-        run_fit_pipeline(conf, last_date_str, token)
+        run_fit_pipeline(conf, last_date_str, token, gear_id)
 
 
 if __name__ == "__main__":
