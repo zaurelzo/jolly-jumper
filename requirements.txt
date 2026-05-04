@@ -1,3 +1,4 @@
+bleak>=0.21.0
 beautifulsoup4==4.8.2
 certifi==2019.11.28
 fitparse>=1.2.0
