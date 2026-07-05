@@ -723,9 +723,9 @@ def upload_fit_bytes_to_strava(token: dict, data: bytes, path: str):
 
     r = req.post(
         "https://www.strava.com/api/v3/uploads",
-        params={"access_token": token["access_token"]},
         files={"file": ("activity.fit", data, "application/octet-stream")},
-        data={"name": name, "data_type": "fit", "trainer": "Workout"}
+        data={"name": name, "data_type": "fit", "trainer": "Workout"},
+        headers={"Authorization": f"Bearer {token['access_token']}"},
     )
 
     if r.ok:

@@ -31,6 +31,13 @@ TOKEN = "TOKEN"  # Single token covers both read and write scopes
 OAUTH_REDIRECT_URI = "http://localhost:5000/authorization"
 OAUTH_SCOPES = "profile:read_all,activity:read_all,profile:write,activity:write"
 
+STRAVA_API_BASE = "https://www.strava.com/api/v3"
+
+
+def auth_header(token):
+    """Build the Authorization header Strava expects for API v3 requests."""
+    return {"Authorization": f"Bearer {token['access_token']}"}
+
 
 # =========================
 # OAuth – automatic authorization
@@ -192,8 +199,9 @@ def refresh_token(client_id, client_secret, refresh_token_value):
 def get_last_activity(token):
     """Retrieve the most recent activity from Strava."""
     res = requests.get(
-        "https://www.strava.com/api/v3/activities",
-        params={"access_token": token["access_token"], "per_page": 1, "page": 1},
+        f"{STRAVA_API_BASE}/activities",
+        params={"per_page": 1, "page": 1},
+        headers=auth_header(token),
     )
     if not res.ok:
         raise RuntimeError(f"Cannot retrieve last activity: {res.content}")
@@ -203,8 +211,8 @@ def get_last_activity(token):
 def get_bikes(token):
     """Retrieve all bikes registered on the athlete's Strava account."""
     res = requests.get(
-        "https://www.strava.com/api/v3/athlete",
-        params={"access_token": token["access_token"]},
+        f"{STRAVA_API_BASE}/athlete",
+        headers=auth_header(token),
     )
     if not res.ok:
         raise RuntimeError(f"Cannot retrieve athlete info: {res.content}")
@@ -214,9 +222,9 @@ def get_bikes(token):
 def set_activity_bike(token, activity_id, gear_id):
     """Assign a bike to an already-uploaded Strava activity."""
     res = requests.put(
-        f"https://www.strava.com/api/v3/activities/{activity_id}",
-        params={"access_token": token["access_token"]},
+        f"{STRAVA_API_BASE}/activities/{activity_id}",
         data={"gear_id": gear_id},
+        headers=auth_header(token),
     )
     if not res.ok:
         raise RuntimeError(f"Cannot set bike for activity {activity_id}: {res.content}")
@@ -298,10 +306,10 @@ def push_activity(token, path, start_time, start_time_pattern="%Y-%m-%dT%H:%M:%S
 
     with open(path, "rb") as f:
         res = requests.post(
-            "https://www.strava.com/api/v3/uploads",
-            params={"access_token": token["access_token"]},
+            f"{STRAVA_API_BASE}/uploads",
             files={"file": f},
             data=params,
+            headers=auth_header(token),
         )
 
     if not res.ok:
@@ -312,8 +320,8 @@ def push_activity(token, path, start_time, start_time_pattern="%Y-%m-%dT%H:%M:%S
 def check_upload(token, activity_id):
     """Check upload status (processed, ready, error, etc.)."""
     res = requests.get(
-        f"https://www.strava.com/api/v3/uploads/{activity_id}",
-        params={"access_token": token["access_token"]},
+        f"{STRAVA_API_BASE}/uploads/{activity_id}",
+        headers=auth_header(token),
     )
     if not res.ok:
         raise RuntimeError(f"Cannot check upload: {res.content}")
