@@ -472,20 +472,25 @@ def compute_fit_stats(path):
         raise ValueError(f"{path} must contain at least 2 records")
 
     distance, duration = 0, 0
+    prev_pos, prev_ts = None, None
 
-    for r1, r2 in zip(records, records[1:]):
-        data1 = {f.name: f.value for f in r1}
-        data2 = {f.name: f.value for f in r2}
+    for record in records:
+        data = {f.name: f.value for f in record}
 
-        if data1.get("position_lat") is not None:
-            lat1 = data1["position_lat"] * 180 / (2 ** 31)
-            lon1 = data1["position_long"] * 180 / (2 ** 31)
-            lat2 = data2["position_lat"] * 180 / (2 ** 31)
-            lon2 = data2["position_long"] * 180 / (2 ** 31)
-            distance += haversine((lat1, lon1), (lat2, lon2))
+        # Records without a GPS fix (start of ride, tunnel, indoor) have no
+        # position fields at all, or have them set to None.
+        lat, lon = data.get("position_lat"), data.get("position_long")
+        if lat is not None and lon is not None:
+            pos = (lat * 180 / (2 ** 31), lon * 180 / (2 ** 31))
+            if prev_pos is not None:
+                distance += haversine(prev_pos, pos)
+            prev_pos = pos
 
-        if data1.get("timestamp") and data2.get("timestamp"):
-            duration += (data2["timestamp"] - data1["timestamp"]).total_seconds()
+        ts = data.get("timestamp")
+        if ts is not None:
+            if prev_ts is not None:
+                duration += (ts - prev_ts).total_seconds()
+            prev_ts = ts
 
     return distance / 1000, duration / 60
 
